@@ -6,6 +6,8 @@ Fetches jobs from Adzuna API, normalizes data, exposes /api/jobs
 import os, requests
 from flask import Flask, jsonify, request
 from datetime import datetime
+from dotenv import load_dotenv
+load_dotenv()
 
 app = Flask(__name__)
 
