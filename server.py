@@ -102,9 +102,6 @@ def get_jobs():
         "what":             keyword,
         "where":            where,
         "results_per_page": int(per_page),
-        "sort_by":          "date",       # newest first always
-        "sort_dir":         "down",
-        "content-type":     "application/json",
     }
     if days_old:
         params["max_days_old"] = int(days_old)
