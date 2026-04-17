@@ -80,7 +80,7 @@ def normalize(job: dict) -> dict:
 def get_jobs():
     role        = request.args.get("role",       "software engineer")
     location    = request.args.get("location",   "india")
-    per_page    = request.args.get("per_page",   "25")
+    per_page    = request.args.get("per_page",   "50")
     # Filters
     days_old    = request.args.get("days_old",   "")     # 1 / 3 / 7 / 30
     exp_filter  = request.args.get("experience", "")     # entry / mid / senior
