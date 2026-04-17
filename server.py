@@ -3,7 +3,7 @@ Job Hunter AI — Backend
 Fetches jobs from Adzuna API, normalizes data, exposes /api/jobs
 """
 
-import os, requests
+import os, requests, random
 from flask import Flask, jsonify, request
 from datetime import datetime
 from dotenv import load_dotenv
@@ -12,12 +12,11 @@ load_dotenv()
 app = Flask(__name__)
 
 # ── Adzuna credentials ────────────────────────────────────────────────────────
-# Get free keys at: https://developer.adzuna.com/signup
 ADZUNA_APP_ID  = os.getenv("ADZUNA_APP_ID",  "YOUR_APP_ID")
 ADZUNA_APP_KEY = os.getenv("ADZUNA_APP_KEY", "YOUR_APP_KEY")
 ADZUNA_BASE    = "https://api.adzuna.com/v1/api/jobs"
 
-# ── Role → Adzuna search keyword mapping ─────────────────────────────────────
+# ── Role → keyword mapping ────────────────────────────────────────────────────
 ROLE_KEYWORDS = {
     "Product":              "product manager",
     "Product Manager":      "product manager",
@@ -36,10 +35,18 @@ ROLE_KEYWORDS = {
     "Finance":              "finance analyst",
 }
 
+# ── Experience keyword injection ──────────────────────────────────────────────
+EXPERIENCE_KEYWORDS = {
+    "entry":  "entry level junior",
+    "mid":    "mid level",
+    "senior": "senior lead",
+}
+
 # ── Normalize a single Adzuna job ─────────────────────────────────────────────
 def normalize(job: dict) -> dict:
-    location_parts = job.get("location", {}).get("display_name", "") or \
-                     job.get("location", {}).get("area", [""])[0]
+    loc = job.get("location", {})
+    area = loc.get("area", [])
+    location = loc.get("display_name", "") or (", ".join(area[1:]) if len(area) > 1 else "")
 
     salary_min = job.get("salary_min")
     salary_max = job.get("salary_max")
@@ -60,7 +67,7 @@ def normalize(job: dict) -> dict:
         "id":          job.get("id", ""),
         "title":       job.get("title", "").strip(),
         "company":     job.get("company", {}).get("display_name", "Unknown"),
-        "location":    location_parts if isinstance(location_parts, str) else ", ".join(location_parts),
+        "location":    location,
         "description": job.get("description", "").strip()[:400],
         "url":         job.get("redirect_url", ""),
         "salary":      salary,
@@ -71,35 +78,53 @@ def normalize(job: dict) -> dict:
 # ── /api/jobs ─────────────────────────────────────────────────────────────────
 @app.route("/api/jobs")
 def get_jobs():
-    role     = request.args.get("role", "software engineer")
-    location = request.args.get("location", "india")
-    page     = request.args.get("page", "1")
-    per_page = request.args.get("per_page", "20")
+    role        = request.args.get("role",       "software engineer")
+    location    = request.args.get("location",   "india")
+    per_page    = request.args.get("per_page",   "25")
+    # Filters
+    days_old    = request.args.get("days_old",   "")     # 1 / 3 / 7 / 30
+    exp_filter  = request.args.get("experience", "")     # entry / mid / senior
+    loc_filter  = request.args.get("loc_filter", "")     # free-text location override
+    # Freshness: client passes a random page (1-5) each refresh
+    page        = request.args.get("page",       str(random.randint(1, 4)))
 
-    # Map profile role to search keyword
+    # Build keyword
     keyword = ROLE_KEYWORDS.get(role, role)
+    if exp_filter and exp_filter in EXPERIENCE_KEYWORDS:
+        keyword = f"{EXPERIENCE_KEYWORDS[exp_filter]} {keyword}"
 
-    # Strip "India", "Bangalore, India" → city only for Adzuna where param
-    where = location.replace(", India", "").replace(" India", "").strip() or "india"
+    # Location: prefer explicit loc_filter, fallback to profile location
+    where = (loc_filter or location).replace(", India", "").replace(" India", "").strip() or "india"
+
+    params = {
+        "app_id":           ADZUNA_APP_ID,
+        "app_key":          ADZUNA_APP_KEY,
+        "what":             keyword,
+        "where":            where,
+        "results_per_page": int(per_page),
+        "sort_by":          "date",       # newest first always
+        "sort_dir":         "down",
+        "content-type":     "application/json",
+    }
+    if days_old:
+        params["max_days_old"] = int(days_old)
 
     try:
         resp = requests.get(
             f"{ADZUNA_BASE}/in/search/{page}",
-            params={
-                "app_id":          ADZUNA_APP_ID,
-                "app_key":         ADZUNA_APP_KEY,
-                "what":            keyword,
-                "where":           where,
-                "results_per_page": int(per_page),
-                "content-type":    "application/json",
-            },
+            params=params,
             timeout=10
         )
         resp.raise_for_status()
         data  = resp.json()
         jobs  = [normalize(j) for j in data.get("results", [])]
         total = data.get("count", len(jobs))
-        return jsonify({"jobs": jobs, "total": total, "page": int(page), "keyword": keyword})
+        return jsonify({
+            "jobs":    jobs,
+            "total":   total,
+            "page":    int(page),
+            "keyword": keyword,
+        })
     except requests.exceptions.HTTPError as e:
         return jsonify({"error": str(e), "jobs": [], "total": 0}), 502
     except Exception as e:
